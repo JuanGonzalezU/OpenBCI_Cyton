@@ -1,0 +1,5 @@
+brainflow
+scipy
+numpy
+PyQt5
+pyqtgraph
