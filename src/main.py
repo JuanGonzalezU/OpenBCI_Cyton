@@ -13,6 +13,21 @@ from functions import *
 import pyqtgraph as pg
 from PyQt5.QtCore import QTimer
 import numpy as np
+import threading
+import pygame
+import sys
+import random
+
+class MainApp(QtWidgets.QWidget):  # or QtWidgets.QMainWindow depending on your need
+    def __init__(self, parent=None):
+        super(MainApp, self).__init__(parent)
+        self.ui = Ui_Form()
+        self.ui.setupUi(self)
+
+    def closeEvent(self, event):
+        self.ui.stop_pygame()  # Ensure Pygame is stopped when the window is closed
+        event.accept()  # Proceed with the default close event
+
 
 class Ui_Form(object):
     def setupUi(self, Form):
@@ -159,6 +174,10 @@ class Ui_Form(object):
         self.retranslateUi(Form)
         QtCore.QMetaObject.connectSlotsByName(Form)
 
+        # Setup for pygame
+        self.shared_beta_power = 30
+        self.start_pygame_thread()
+
     def retranslateUi(self, Form):
         _translate = QtCore.QCoreApplication.translate
         Form.setWindowTitle(_translate("Form", "EEG Analysis Interface"))
@@ -261,7 +280,7 @@ class Ui_Form(object):
         
         # Start data stream based on the window size
         self.data = self.board.get_board_data()        
-        self.eeg_data = self.data[self.eeg_channels, :]               
+        self.eeg_data = self.data[self.eeg_channels, :]       
 
         # Change output
         self.label_6.setText('Streaming Data ...')
@@ -304,37 +323,114 @@ class Ui_Form(object):
         colors = ['r', 'g', 'b', 'c', 'm', 'y', 'b', 'w']  # Colors for each channel
         
         if self.BoxFiltering.isChecked():
-            self.eeg_channel_data = eeg_filtering(self.eeg_channel_data,self.fs)
+            self.eeg_channel_data_filt = eeg_filtering(self.eeg_channel_data,self.fs) 
+        else:
+            self.eeg_channel_data_filt = self.eeg_channel_data       
 
         if self.BoxTime.isChecked():
             self.TimeGraph.clear()  # Clear previous plots            
             for i, ch_index in enumerate(self.eeg_channel_indices):
-                self.TimeGraph.plot(t, self.eeg_channel_data[i, :] + i * 2000, pen=colors[ch_index % len(colors)])
+                self.TimeGraph.plot(t, self.eeg_channel_data_filt[i, :] + i * 2000, pen=colors[ch_index % len(colors)])
             
         # Get Fourier and plot in Frequency Domain
         if self.BoxFFT.isChecked():
-            self.freqs, self.psds = compute_fft_welch(self.eeg_channel_data, self.fs)
+            self.freqs, self.psds = compute_fft_welch(self.eeg_channel_data_filt, self.fs)
             self.FFTGraph.clear()
             for i, ch_index in enumerate(self.eeg_channel_indices):
                 self.FFTGraph.plot(self.freqs,self.psds[i,:],pen=colors[ch_index % len(colors)])
 
         # Get Power per Band
         if self.BoxPSD.isChecked():
-            self.band_power = compute_power_bands(self.freqs,self.psds)
+            self.band_power = compute_power_bands(self.freqs,self.psds)       
+            
+            # Update pygame circle
+            total_power = np.sum(self.band_power)
+            if total_power == 0:
+                print("Total power is zero. Cannot compute ratio.")
+                self.shared_beta_power = 0  # Or set to a default value
+            else:
+                self.shared_beta_power = self.band_power[3] / total_power
+            
+            if np.isnan(self.shared_beta_power):
+                print("Computed beta power ratio is NaN.")
+                self.shared_beta_power = 0  # Handle NaN by setting to a default value
+
             self.PSD.clear()
             bar_graph_item = pg.BarGraphItem(x=[2,4,6,8,10], height=self.band_power, width=0.8, brush='b')
             self.PSD.addItem(bar_graph_item)
             
             # Update the x-axis to show categorical labels
             self.PSD.getAxis('bottom').setTicks([list(zip([2,4,6,8,10], self.bands))])
-        
-        
 
+    def stop_pygame(self):
+        # Set a flag that will be checked in the pygame loop
+        self.running = False
+                
+    def start_pygame_thread(self):
+        self.pygame_thread = threading.Thread(target=self.run_pygame)  # Correct: pass reference, not call
+        self.pygame_thread.daemon = True
+        self.pygame_thread.start()
+        
+    def run_pygame(self):
+        pygame.init()
 
+        # Get the size of the current display 
+        infoObject = pygame.display.Info()
+        screen_width, screen_height = infoObject.current_w, infoObject.current_h
+        #screen_width, screen_height = 300,200
+        # Set the display mode to the full size of the screen
+        screen = pygame.display.set_mode((screen_width, screen_height))
+
+        self.running = True
+        min_radius = 10   # Maximum radius when beta power is high
+        max_radius = 0.9*screen_height/2  # Minimum radius when beta power is low
+        current_radius = max_radius
+
+        num_points = 200  # Number of points to calculate along the circle
+        max_offset = 5#15   # Maximum offset for the target position
+        movement_speed = 0.01  # Movement speed towards the target
+        radius_adjust_speed = 0.02  # Speed at which the main circle radius adjusts
+
+        # Initialize points and their target offsets
+        points = np.array([(np.cos(2 * np.pi / num_points * i), np.sin(2 * np.pi / num_points * i)) for i in range(num_points)])
+        target_offsets = np.random.uniform(-max_offset, max_offset, (num_points, 2))
+        current_offsets = np.zeros((num_points, 2))
+
+        # Example shared beta power; you should link this to your actual data
+        self.shared_beta_power = 0.5
+
+        while self.running:
+            for event in pygame.event.get():
+                if event.type is pygame.QUIT:
+                    running = False
+                    pygame.quit()
+                    sys.exit()
+
+            screen.fill((0, 0, 0))
+
+            # Inverted update of the circle radius: higher beta decreases the radius
+            target_radius = int((1 - self.shared_beta_power) * (max_radius - min_radius) + min_radius)
+            current_radius += (target_radius - current_radius) * radius_adjust_speed
+
+            # Update points positions
+            for i in range(num_points):
+                # Move current offsets towards the target offsets
+                current_offsets[i] += (target_offsets[i] - current_offsets[i]) * movement_speed
+                # If the point is very close to the target, reset the target
+                if np.linalg.norm(target_offsets[i] - current_offsets[i]) < 0.5:
+                    target_offsets[i] = np.random.uniform(-max_offset, max_offset, 2)
+
+                # Calculate position of each point
+                x = int(screen_width / 2 + (current_radius + current_offsets[i][0]) * points[i][0])
+                y = int(screen_height / 2 + (current_radius + current_offsets[i][1]) * points[i][1])
+                pygame.draw.circle(screen, (255, 255, 255), (x, y), 2)  # Draw small circles to form the wavy circle
+
+            pygame.display.flip()
+        else: 
+            pygame.quit()
 
 # Main block to run the application
 if __name__ == "__main__":
-    import sys
     app = QtWidgets.QApplication(sys.argv)  # Create an instance of QApplication
 
     # Set dark theme styles for PyQtGraph and the application
@@ -367,9 +463,7 @@ if __name__ == "__main__":
             border-style: inset;
         }
     """)
-    
-    Form = QtWidgets.QWidget()              # Create a QWidget, which will be your main window
-    ui = Ui_Form()                          # Create an instance of your UI class
-    ui.setupUi(Form)                        # Setup the UI
-    Form.show()                             # Show the form
-    sys.exit(app.exec_())                   # Execute the application's main loop
+
+    main_window = MainApp()  # Use the MainApp class for managing the main window
+    main_window.show()  # Show the main window
+    sys.exit(app.exec_())  # Start the event loop and wait for the app to close

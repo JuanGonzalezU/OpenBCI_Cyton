@@ -3,3 +3,4 @@ scipy
 numpy
 PyQt5
 pyqtgraph
+pygame
