@@ -40,7 +40,7 @@ def compute_fft_welch(eeg_data, fs, nperseg=None):
 
 
 def compute_power_bands(freqs, psds):
-    bands = {'Delta': (3, 4), 'Theta': (4, 8), 'Alpha': (8, 13), 'Beta': (13, 30), 'Gamma': (30, 100)}
+    bands = {'Delta': (1, 4), 'Theta': (4, 8), 'Alpha': (8, 13), 'Beta': (13, 30), 'Gamma': (30, 100)}
     band_indices = {band: np.logical_and(freqs >= low, freqs <= high) for band, (low, high) in bands.items()}
     
     psd_mean = np.mean(psds, axis=0)

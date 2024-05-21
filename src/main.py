@@ -17,6 +17,9 @@ import threading
 import pygame
 import sys
 import random
+import csv
+import os
+from datetime import datetime
 
 class MainApp(QtWidgets.QWidget):  # or QtWidgets.QMainWindow depending on your need
     def __init__(self, parent=None):
@@ -33,6 +36,7 @@ class Ui_Form(object):
     def setupUi(self, Form):
 
         self.is_streaming = False
+        self.record_data = False
 
         # Create a QTimer object
         self.timer_update = QTimer()
@@ -144,15 +148,19 @@ class Ui_Form(object):
         self.BoxTime.setGeometry(QtCore.QRect(30, 410, 70, 17))
         self.BoxTime.setObjectName("BoxTime")
 
+        self.BoxTest = QtWidgets.QCheckBox(Form)
+        self.BoxTest.setGeometry(QtCore.QRect(30, 430, 70, 17))
+        self.BoxTest.setObjectName("BoxTime")
+
         # Graph
         self.win = pg.GraphicsLayoutWidget(Form)  # Automatically generates grids with multiple items
         self.win.setGeometry(QtCore.QRect(210, 80, 991, 641))
         #self.win.setBackground('w') 
         
         # Add subgraphs
-        self.TimeGraph = self.win.addPlot(row=0, col=0,colspan=2,title='Time Domain')
-        self.FFTGraph = self.win.addPlot(row=1, col=0,title = 'PSD')
-        self.PSD = self.win.addPlot(row=1, col=1,title='Power per Band') 
+        self.TimeGraph = self.win.addPlot(row=0, col=0, colspan=2, title='Time Domain')
+        self.FFTGraph = self.win.addPlot(row=1, col=0, title='PSD')
+        self.PSD = self.win.addPlot(row=1, col=1, title='Power per Band') 
         self.win.setVisible(True)
 
         # Main title label for the EEG Analysis application
@@ -169,6 +177,28 @@ class Ui_Form(object):
         self.label_6 = QtWidgets.QLabel(Form)
         self.label_6.setGeometry(QtCore.QRect(210, 730, 991, 16))
         self.label_6.setObjectName("label_6")
+
+        # Label for trial name
+        self.label_7 = QtWidgets.QLabel(Form)
+        self.label_7.setGeometry(QtCore.QRect(30, 690, 47, 13))
+        self.label_7.setObjectName("label_7")
+
+        # Text input for trial name
+        self.trial_name = QtWidgets.QLineEdit(Form)
+        self.trial_name.setGeometry(QtCore.QRect(90, 690, 81, 20))
+        self.trial_name.setObjectName("trial_name")
+
+        # Button to begin recording
+        self.record_button = QtWidgets.QPushButton(Form)
+        self.record_button.setGeometry(QtCore.QRect(20, 720, 75, 23))
+        self.record_button.setObjectName("record_button")
+        self.record_button.clicked.connect(self.begin_recording)
+
+        # Button to end recording
+        self.end_record_button = QtWidgets.QPushButton(Form)
+        self.end_record_button.setGeometry(QtCore.QRect(100, 720, 75, 23))
+        self.end_record_button.setObjectName("end_record_button")
+        self.end_record_button.clicked.connect(self.end_recording)
 
         # Function to apply translations to all UI components
         self.retranslateUi(Form)
@@ -199,14 +229,19 @@ class Ui_Form(object):
         self.BoxFFT.setText(_translate("Form", "FFT"))
         self.BoxPSD.setText(_translate("Form", "PSD"))
         self.BoxTime.setText(_translate("Form", "Time D."))
+        self.BoxTest.setText(_translate("Form", "Test"))
         self.label_5.setText(_translate("Form", "EEG Analysis"))
         self.label_6.setText(_translate("Form", "Outputs"))
+        self.label_7.setText(_translate("Form", "Trial Name"))
+        self.record_button.setText(_translate("Form", "Start"))
+        self.end_record_button.setText(_translate("Form", "End"))
 
     def reset_app(self):
             # Reset all QLineEdit inputs to their default state
             self.com_port.clear()
             self.win_size.clear()
             self.fps.clear()
+            self.trial_name.clear()
 
             # Uncheck all QCheckBox widgets
             self.BoxCh1.setChecked(False)
@@ -221,6 +256,7 @@ class Ui_Form(object):
             self.BoxFFT.setChecked(False)
             self.BoxPSD.setChecked(False)
             self.BoxTime.setChecked(False)
+            self.BoxTest.setChecked(False)
 
             # Clear all graphical data
             self.TimeGraph.clear()
@@ -344,12 +380,15 @@ class Ui_Form(object):
             self.band_power = compute_power_bands(self.freqs,self.psds)       
             
             # Update pygame circle
-            total_power = np.sum(self.band_power)
+            total_power = np.sum(self.band_power[1:])
             if total_power == 0:
                 print("Total power is zero. Cannot compute ratio.")
                 self.shared_beta_power = 0  # Or set to a default value
             else:
-                self.shared_beta_power = self.band_power[3] / total_power
+                if self.BoxTest.isChecked():
+                    self.shared_beta_power = self.band_power[2] / total_power
+                else: 
+                    self.shared_beta_power = self.band_power[3] / total_power
             
             if np.isnan(self.shared_beta_power):
                 print("Computed beta power ratio is NaN.")
@@ -362,6 +401,52 @@ class Ui_Form(object):
             # Update the x-axis to show categorical labels
             self.PSD.getAxis('bottom').setTicks([list(zip([2,4,6,8,10], self.bands))])
 
+            if self.record_data:
+
+                # Get the current timestamp
+                timestamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+                
+                # Convert the numerical values in the vector to strings
+                band_data = [str(value) for value in self.band_power]
+                
+                # Data
+                data = [timestamp] + band_data
+            
+                # Define the header
+                header = ['Time','Delta', 'Theta', 'Alpha', 'Beta', 'Gamma']
+
+                # Check if the file exists and is empty
+                file_exists = os.path.isfile(self.filename)
+                is_empty = file_exists and os.path.getsize(self.filename) == 0
+
+                # Open the file in append mode
+                with open(self.filename, mode='a', newline='') as file:
+                    writer = csv.writer(file)
+                    # If the file is empty, write the header
+                    if not file_exists or is_empty:
+                        writer.writerow(header)
+                    # Append the vector
+                    writer.writerow(data)
+                            
+
+    def begin_recording(self):
+        trial_name = self.trial_name.text()
+        
+        if not trial_name:
+            self.label_6.setText("Please enter a trial name.")
+            return
+        
+        # Set record data to true and initialize csv files
+        self.record_data = True
+        self.filename = os.path.join('.','results',trial_name+'_power.csv')
+        with open(self.filename, mode='w', newline='') as file:
+            pass 
+        self.label_6.setText("csv file created ... recoding data!")
+
+    def end_recording(self):
+        self.record_data = False
+        self.label_6.setText("Data recorded :)")
+    
     def stop_pygame(self):
         # Set a flag that will be checked in the pygame loop
         self.running = False
